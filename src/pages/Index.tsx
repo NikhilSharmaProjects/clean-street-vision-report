@@ -1,6 +1,5 @@
-
 import { useState, useRef } from 'react';
-import { Camera, MapPin, FileText, Copy, CheckCircle, AlertCircle, Upload } from 'lucide-react';
+import { Camera, MapPin, FileText, Copy, CheckCircle, AlertCircle, Upload, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -8,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/hooks/use-toast';
 import { cn } from '@/lib/utils';
+import { generateAIReport, generateSimpleReport } from '@/services/reportGenerator';
 
 interface DetectionResult {
   hasTrash: boolean;
@@ -41,6 +41,9 @@ const Index = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportText, setReportText] = useState<string>('');
+  const [isAIGenerated, setIsAIGenerated] = useState(false);
 
   // Mock AI detection function (replace with actual NVIDIA Florence-2 implementation)
   const analyzeImage = async (imageData: string): Promise<DetectionResult> => {
@@ -186,9 +189,11 @@ const Index = () => {
     }
   };
 
-  const generateReport = () => {
+  const generateReport = async () => {
     if (!capturedImage || !detection || !location.address) return;
 
+    setIsGeneratingReport(true);
+    
     const newReport: Report = {
       image: capturedImage,
       detection,
@@ -197,37 +202,53 @@ const Index = () => {
       reportId: `TR-${Date.now().toString().slice(-6)}`
     };
 
+    try {
+      console.log('Attempting AI report generation...');
+      const aiReportText = await generateAIReport({
+        detectionResult: detection,
+        location,
+        timestamp: newReport.timestamp,
+        reportId: newReport.reportId
+      });
+
+      if (aiReportText) {
+        console.log('AI report generated successfully');
+        setReportText(aiReportText);
+        setIsAIGenerated(true);
+        toast({
+          title: "AI Report Generated",
+          description: "Smart report created with AI assistance!",
+        });
+      } else {
+        throw new Error('AI generation returned null');
+      }
+    } catch (error) {
+      console.log('AI generation failed, using simple report');
+      const simpleReportText = generateSimpleReport({
+        detectionResult: detection,
+        location,
+        timestamp: newReport.timestamp,
+        reportId: newReport.reportId
+      });
+      
+      setReportText(simpleReportText);
+      setIsAIGenerated(false);
+      toast({
+        title: "Report Generated",
+        description: "Standard report created successfully!",
+      });
+    }
+
     setReport(newReport);
     setCurrentStep('report');
-    
-    toast({
-      title: "Report Generated",
-      description: "Your trash report is ready to share!",
-    });
+    setIsGeneratingReport(false);
   };
 
   const copyReportToClipboard = () => {
-    if (!report) return;
-
-    const reportText = `TRASH REPORT - ${report.reportId}
-
-Date & Time: ${new Date(report.timestamp).toLocaleString()}
-Location: ${report.location.address}
-${report.location.latitude ? `Coordinates: ${report.location.latitude.toFixed(6)}, ${report.location.longitude?.toFixed(6)}` : ''}
-
-AI Detection Results:
-- Confidence: ${(report.detection.confidence * 100).toFixed(0)}%
-- Description: ${report.detection.description}
-
-This report was automatically generated using AI detection technology.
-Please investigate and take appropriate action.
-
-Image attached separately.`;
-
     navigator.clipboard.writeText(reportText).then(() => {
       toast({
         title: "Report Copied",
-        description: "Report text has been copied to clipboard. You can now paste it into an email or message.",
+        description: "Report text has been copied to clipboard.",
       });
     });
   };
@@ -239,6 +260,8 @@ Image attached separately.`;
     setLocation({ address: '' });
     setManualAddress('');
     setReport(null);
+    setReportText('');
+    setIsAIGenerated(false);
     setIsCameraActive(false);
   };
 
@@ -425,11 +448,21 @@ Image attached separately.`;
                 
                 <Button 
                   onClick={generateReport}
-                  disabled={!location.address.trim()}
+                  disabled={!location.address.trim() || isGeneratingReport}
                   className="w-full"
                   size="lg"
                 >
-                  Generate Report
+                  {isGeneratingReport ? (
+                    <>
+                      <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full mr-2"></div>
+                      Generating Report...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4 mr-2" />
+                      Generate AI Report
+                    </>
+                  )}
                 </Button>
               </CardContent>
             </Card>
@@ -437,43 +470,19 @@ Image attached separately.`;
         )}
 
         {/* Step 4: Generated Report */}
-        {currentStep === 'report' && report && (
+        {currentStep === 'report' && report && reportText && (
           <div className="space-y-6">
             <Card className="shadow-lg border-green-200">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <CheckCircle className="w-5 h-5 text-green-500" />
-                  Report Generated
+                  {isAIGenerated ? 'AI Report Generated' : 'Report Generated'}
+                  {isAIGenerated && <Sparkles className="w-4 h-4 text-blue-500" />}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="bg-gray-50 rounded-lg p-4 font-mono text-sm">
-                  <div className="font-bold mb-3">TRASH REPORT - {report.reportId}</div>
-                  
-                  <div className="space-y-2">
-                    <div>
-                      <span className="font-semibold">Date & Time:</span><br />
-                      {new Date(report.timestamp).toLocaleString()}
-                    </div>
-                    
-                    <div>
-                      <span className="font-semibold">Location:</span><br />
-                      {report.location.address}
-                    </div>
-                    
-                    {report.location.latitude && (
-                      <div>
-                        <span className="font-semibold">Coordinates:</span><br />
-                        {report.location.latitude.toFixed(6)}, {report.location.longitude?.toFixed(6)}
-                      </div>
-                    )}
-                    
-                    <div>
-                      <span className="font-semibold">AI Detection:</span><br />
-                      Confidence: {(report.detection.confidence * 100).toFixed(0)}%<br />
-                      {report.detection.description}
-                    </div>
-                  </div>
+                <div className="bg-gray-50 rounded-lg p-4 text-sm max-h-96 overflow-y-auto">
+                  <pre className="whitespace-pre-wrap font-sans">{reportText}</pre>
                 </div>
                 
                 <div className="mt-4 space-y-3">
@@ -491,6 +500,11 @@ Image attached separately.`;
                   <p className="text-sm text-blue-800">
                     <strong>Next Steps:</strong> Copy the report text and send it to your municipal corporation along with the photo. Most cities accept reports via email, phone, or their official apps.
                   </p>
+                  {!isAIGenerated && (
+                    <p className="text-xs text-blue-600 mt-2">
+                      💡 AI generation was unavailable, so we created a standard report for you.
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>
